@@ -1,0 +1,8 @@
+{{define "public/layout"}}
+    {{template "public/header" .}}
+    <!--内容部分-->
+    <div class="container">
+        {{block "content" . }}{{end}}
+    </div>
+    {{template "public/footer" .}}
+{{end}}
