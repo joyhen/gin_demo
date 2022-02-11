@@ -11,17 +11,20 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
 func main() {
 	//demo1()
-	demo2()
+	//demo2()
 	//demo3()
 	//demo4()
 	//demo_postdata()
 	//demo_postdata2()
 	//post_file()
+	postFiles()
+	//postFilesChan()
 }
 
 func demo1() {
@@ -313,10 +316,11 @@ func demo_postdata2() {
 	engine.Run(":8080")
 }
 
+// 单文件上传
 func post_file() {
 	var (
-		file *multipart.FileHeader
 		err  error
+		file *multipart.FileHeader
 	)
 
 	engine := gin.Default()
@@ -330,16 +334,135 @@ func post_file() {
 			context.String(200, fmt.Sprintf("error:%s", err.Error()))
 		}
 
-		filename := file.Filename
-		filepath := uploadDoc + "/" + filename
-
 		if _, err = os.Stat(uploadDoc); os.IsNotExist(err) {
 			os.Mkdir(uploadDoc, os.ModeDir)
 		}
-		if err = context.SaveUploadedFile(file, filepath); err != nil {
+
+		if err = context.SaveUploadedFile(file, uploadDoc+"/"+file.Filename); err != nil {
 			context.String(200, fmt.Sprintf("error:%s", err.Error()))
 		}
-		context.String(200, fmt.Sprintf("%s uploaded!", filename))
+		context.String(200, "uploaded!")
+	})
+
+	engine.Run(":8080")
+}
+
+// 多文件上传
+func postFiles() {
+	var (
+		err           error
+		file          *multipart.FileHeader
+		form          *multipart.Form
+		files         []*multipart.FileHeader
+		once          sync.Once
+		fileCount     int
+		fileLocalPath string
+	)
+
+	engine := gin.Default()
+
+	currentDoc := os.Getenv("GOPATH")
+	uploadDoc := filepath.Join(currentDoc, "src/upload")
+
+	engine.MaxMultipartMemory = 8 << 20 //8m
+	engine.POST("/upload", func(context *gin.Context) {
+		datetime := time.Now()
+
+		//多文件上传
+		form, _ = context.MultipartForm()
+		files = form.File["file"]
+		fileCount = len(files)
+
+		if fileCount == 0 {
+			context.String(200, "未获取到上传的文件")
+		}
+
+		for _, file = range files {
+			once.Do(func() {
+				fmt.Println("执行了一次")
+				if _, err = os.Stat(uploadDoc); os.IsNotExist(err) {
+					os.Mkdir(uploadDoc, os.ModeDir)
+				}
+			})
+
+			fileLocalPath = uploadDoc + "/" + file.Filename
+			if err = context.SaveUploadedFile(file, fileLocalPath); err != nil {
+				log.Printf("error:%s", err.Error())
+			}
+
+		}
+
+		totalTime := time.Now().Sub(datetime).Milliseconds()
+		context.String(200, fmt.Sprintf("一共 %d 个文件上传完毕，耗时 %dms !", fileCount, totalTime))
+	})
+
+	engine.Run(":8080")
+}
+
+// 多文件上传
+func postFilesChan() {
+	var (
+		err       error
+		file      *multipart.FileHeader
+		form      *multipart.Form
+		files     []*multipart.FileHeader
+		once      sync.Once
+		fileChan  chan *multipart.FileHeader
+		fileCount int
+	)
+
+	engine := gin.Default()
+
+	currentDoc := os.Getenv("GOPATH")
+	uploadDoc := filepath.Join(currentDoc, "src/upload")
+
+	engine.MaxMultipartMemory = 8 << 20 //8m
+	engine.POST("/upload", func(context *gin.Context) {
+		datetime := time.Now()
+
+		//多文件上传
+		form, _ = context.MultipartForm()
+		files = form.File["file"]
+		fileCount = len(files)
+
+		if fileCount == 0 {
+			context.String(200, "未获取到上传的文件")
+		}
+
+		fileChan = make(chan *multipart.FileHeader, fileCount)
+		//defer close(fileChan)
+
+		for _, file = range files {
+			once.Do(func() {
+				fmt.Println("执行了一次")
+				if _, err = os.Stat(uploadDoc); os.IsNotExist(err) {
+					os.Mkdir(uploadDoc, os.ModeDir)
+				}
+			})
+
+			fileChan <- file //丢入channel中
+		}
+
+		go func(cf chan *multipart.FileHeader) {
+			defer close(cf)
+			var chanFile *multipart.FileHeader
+			for {
+				select {
+				//case chanFile = <-fileChan:
+				case chanFile = <-cf:
+				}
+
+				go func(fileHeader *multipart.FileHeader) {
+					fileLocalPath := uploadDoc + "/" + fileHeader.Filename
+					if err = context.SaveUploadedFile(fileHeader, fileLocalPath); err != nil {
+						log.Printf("error:%s", err.Error())
+					}
+				}(chanFile)
+			}
+		}(fileChan)
+
+		totalTime := time.Now().Sub(datetime).Milliseconds()
+		context.String(200, fmt.Sprintf("一共 %d 个文件上传完毕，耗时 %dms !", fileCount, totalTime))
 	})
 
 	engine.Run(":8080")
